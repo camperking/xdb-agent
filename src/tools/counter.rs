@@ -6,10 +6,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct IncrementCounterArgs;
+pub struct IncrementCounterArgs {}
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct GetCounterArgs;
+pub struct GetCounterArgs {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -56,10 +56,7 @@ impl Tool for IncrementCounter {
         ToolDefinition {
             name: "increment_counter".to_string(),
             description: "Increment a counter by 1 and return the new value".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {}
-            }),
+            parameters: json!({}),
         }
     }
 
@@ -92,10 +89,7 @@ impl Tool for GetCounter {
         ToolDefinition {
             name: "get_counter".to_string(),
             description: "Get the current value of the counter without modifying it".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {}
-            }),
+            parameters: json!({}),
         }
     }
 

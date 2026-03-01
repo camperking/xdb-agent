@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct GetCurrentTimeArgs;
+pub struct GetCurrentTimeArgs {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -24,10 +24,7 @@ impl Tool for GetCurrentTime {
         ToolDefinition {
             name: "get_time".to_string(),
             description: "Get the current date and time in UTC format (YYYY-MM-DD HH:MM:SS UTC)".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {}
-            }),
+            parameters: json!({}),
         }
     }
 
