@@ -32,17 +32,17 @@ impl Tool for Add {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "add".to_string(),
-            description: "Add two numbers together. Returns the sum of a and b.".to_string(),
+            description: "Addiert zwei Zahlen. Gibt die Summe von a und b zurück.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "a": {
                         "type": "integer",
-                        "description": "The first number"
+                        "description": "Die erste Zahl"
                     },
                     "b": {
                         "type": "integer",
-                        "description": "The second number"
+                        "description": "Die zweite Zahl"
                     }
                 },
                 "required": ["a", "b"]
@@ -69,17 +69,17 @@ impl Tool for Multiply {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "multiply".to_string(),
-            description: "Multiply two numbers together. Returns the product of x and y.".to_string(),
+            description: "Multipliziert zwei Zahlen. Gibt das Produkt von x und y zurück.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "x": {
                         "type": "integer",
-                        "description": "The first number"
+                        "description": "Die erste Zahl"
                     },
                     "y": {
                         "type": "integer",
-                        "description": "The second number"
+                        "description": "Die zweite Zahl"
                     }
                 },
                 "required": ["x", "y"]

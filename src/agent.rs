@@ -19,6 +19,7 @@ use crate::tools::{
 
 pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
 
+const XDEVBOT_PREAMBLE: &str = include_str!("templates/xDevBot.md");
 const MAX_PROJECT_FILES: usize = 500;
 const MAX_FILE_BYTES: u64 = 200_000;
 const CONTEXT_USAGE_THRESHOLD_TOKENS: u64 = 120_000;
@@ -159,7 +160,7 @@ impl Agent {
 
     async fn compact_and_reinitialize(&mut self) -> anyhow::Result<PathBuf> {
 
-        let summary_prompt = "Summarize the conversation so far as compact Markdown for long-term memory. Include:\n- Key user preferences and constraints\n- Decided solutions and rationale\n- Important facts and identifiers\n- Open questions and next actions\nUse concise bullet points and headings.";
+        let summary_prompt = "Fasse die bisherige Unterhaltung als kompaktes Markdown für das Langzeitgedächtnis zusammen. Enthalte:\n- Wichtige Nutzerpräferenzen und Einschränkungen\n- Entschiedene Lösungen und Begründungen\n- Wichtige Fakten und Kennungen\n- Offene Fragen und nächste Schritte\nNutze prägnante Stichpunkte und Überschriften.";
 
         let response = self
             .inner
@@ -313,11 +314,7 @@ async fn build_inner() -> InnerAgent {
 
     let mut builder = AgentBuilder::new(client.completion_model("Qwen3.5-35B-A3B"))
         .name("Chat Agent")
-        .preamble(
-            "You are a helpful assistant with access to tools. \
-             You can perform calculations, get the current time, and manage a counter. \
-             Use the tools provided to answer the user's question.",
-        )
+        .preamble(XDEVBOT_PREAMBLE)
         .default_max_turns(100)
         .tools(build_tools());
 

@@ -55,7 +55,7 @@ impl Tool for IncrementCounter {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "increment_counter".to_string(),
-            description: "Increment a counter by 1 and return the new value".to_string(),
+            description: "Erhöht einen Zähler um 1 und gibt den neuen Wert zurück".to_string(),
             parameters: json!({}),
         }
     }
@@ -88,7 +88,7 @@ impl Tool for GetCounter {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_counter".to_string(),
-            description: "Get the current value of the counter without modifying it".to_string(),
+            description: "Gibt den aktuellen Wert des Zählers zurück, ohne ihn zu verändern".to_string(),
             parameters: json!({}),
         }
     }

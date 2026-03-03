@@ -23,7 +23,7 @@ impl Tool for GetCurrentTime {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_time".to_string(),
-            description: "Get the current date and time in UTC format (YYYY-MM-DD HH:MM:SS UTC)".to_string(),
+            description: "Gibt das aktuelle Datum und die aktuelle Uhrzeit im UTC-Format zurück (YYYY-MM-DD HH:MM:SS UTC)".to_string(),
             parameters: json!({}),
         }
     }

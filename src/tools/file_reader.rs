@@ -26,13 +26,13 @@ impl Tool for ReadFile {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "read_file".to_string(),
-            description: "Read the contents of a file from the filesystem. Returns the full file content as a string.".to_string(),
+            description: "Liest den Inhalt einer Datei aus dem Dateisystem. Gibt den vollständigen Dateiinhalt als Zeichenkette zurück.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "The path to the file to read"
+                        "description": "Der Pfad zur zu lesenden Datei"
                     }
                 },
                 "required": ["path"]

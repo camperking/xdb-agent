@@ -157,6 +157,10 @@ fn format_agent_input(text: &str, sender_name: Option<&str>) -> String {
     }
 }
 
+fn should_suppress_reply(reply: &str) -> bool {
+    reply.trim() == "HEARTBEAT_OK"
+}
+
 /// Check if a message is from an allowed source.
 fn check_allowed(
     sender: &Uuid,
@@ -319,6 +323,11 @@ where
                         format!("Sorry, an error occurred: {e}")
                     }
                 };
+
+                if should_suppress_reply(&reply) {
+                    debug!(owner = %owner_label, ?sender, "suppressing HEARTBEAT_OK reply");
+                    continue;
+                }
 
                 info!(owner = %owner_label, ?sender, "replying: {reply}");
 
