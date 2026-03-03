@@ -2,12 +2,15 @@ use directories::ProjectDirs;
 use rig::agent::AgentBuilder;
 use rig::client::EmbeddingsClient;
 use rig::client::CompletionClient;
+use rig::client::Nothing;
 use rig::completion::{Message, Prompt, PromptError, Usage};
 use rig::embeddings::{Embed, EmbedError, EmbeddingsBuilder, TextEmbedder};
+use rig::providers::ollama;
 use rig::providers::openai;
 use rig::vector_store::in_memory_store::InMemoryVectorStore;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 use crate::tools::{
@@ -18,6 +21,7 @@ pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
 
 const MAX_PROJECT_FILES: usize = 500;
 const MAX_FILE_BYTES: u64 = 200_000;
+const CONTEXT_USAGE_THRESHOLD_TOKENS: u64 = 120_000;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 struct ProjectFileDocument {
@@ -54,7 +58,7 @@ impl Agent {
     }
 
     pub async fn chat(&mut self, input: &str) -> Result<String, PromptError> {
-        if let Some(response) = self.handle_slash_command(input) {
+        if let Some(response) = self.handle_slash_command(input).await {
             return Ok(response);
         }
 
@@ -92,10 +96,14 @@ impl Agent {
             "token usage"
         );
 
+        if let Err(error) = self.compact_and_reinitialize_if_needed().await {
+            warn!(owner = %self.owner, %error, "failed to compact context at threshold");
+        }
+
         Ok(output.to_string())
     }
 
-    pub fn handle_slash_command(&mut self, input: &str) -> Option<String> {
+    pub async fn handle_slash_command(&mut self, input: &str) -> Option<String> {
         let command = input.trim();
         match command {
             "/new" => {
@@ -103,6 +111,16 @@ impl Agent {
                 Some("Started a new conversation.".to_string())
             }
             "/usage" => Some(self.usage_summary()),
+            "/compact" => Some(match self.compact_and_reinitialize().await {
+                Ok(path) => format!(
+                    "Conversation compacted. Summary written to {} and agent reinitialized.",
+                    path.display()
+                ),
+                Err(error) => {
+                    warn!(owner = %self.owner, %error, "manual compaction failed");
+                    format!("Compaction failed: {error}")
+                }
+            }),
             _ => None,
         }
     }
@@ -122,6 +140,76 @@ impl Agent {
         )
     }
 
+    async fn compact_and_reinitialize_if_needed(&mut self) -> anyhow::Result<()> {
+        if self.cumulative_usage.total_tokens < CONTEXT_USAGE_THRESHOLD_TOKENS {
+            return Ok(());
+        }
+
+        let summary_path = self.compact_and_reinitialize().await?;
+
+        info!(
+            owner = %self.owner,
+            path = %summary_path.display(),
+            threshold = CONTEXT_USAGE_THRESHOLD_TOKENS,
+            "context threshold reached; wrote memory summary and reinitialized agent"
+        );
+
+        Ok(())
+    }
+
+    async fn compact_and_reinitialize(&mut self) -> anyhow::Result<PathBuf> {
+
+        let summary_prompt = "Summarize the conversation so far as compact Markdown for long-term memory. Include:\n- Key user preferences and constraints\n- Decided solutions and rationale\n- Important facts and identifiers\n- Open questions and next actions\nUse concise bullet points and headings.";
+
+        let response = self
+            .inner
+            .prompt(summary_prompt)
+            .with_history(&mut self.history)
+            .await?;
+
+        let summary_md = response.to_string();
+        let summary_path = write_memory_summary_markdown(&self.owner, &summary_md)?;
+
+        self.inner = build_inner().await;
+        self.history.clear();
+        self.cumulative_usage = Usage::default();
+
+        Ok(summary_path)
+    }
+
+}
+
+fn write_memory_summary_markdown(owner: &str, summary: &str) -> anyhow::Result<PathBuf> {
+    let memory_dir = ProjectDirs::from("org", "xdb", "xdb-agent")
+        .ok_or_else(|| anyhow::anyhow!("could not determine XDG project data directory"))?
+        .data_dir()
+        .join("memory");
+
+    std::fs::create_dir_all(&memory_dir)?;
+
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let owner_slug = sanitize_filename_segment(owner);
+    let file_name = format!("history-summary-{owner_slug}-{timestamp}.md");
+    let path = memory_dir.join(file_name);
+
+    std::fs::write(&path, summary)?;
+    Ok(path)
+}
+
+fn sanitize_filename_segment(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "agent".to_string()
+    } else {
+        out
+    }
 }
 
 fn has_provider_usage(usage: Usage) -> bool {
@@ -210,15 +298,15 @@ fn load_project_documents(root: &Path) -> Vec<ProjectFileDocument> {
     docs
 }
 
-pub async fn initialize() -> Agent {
+async fn build_inner() -> InnerAgent {
     let client: openai::CompletionsClient = openai::CompletionsClient::builder()
         .api_key("")
         .base_url("http://localhost:8080")
         .build()
         .expect("Failed to build OpenAI client");
 
-    let embedding_client: openai::Client = openai::Client::builder()
-        .api_key("")
+    let embedding_client: ollama::Client = ollama::Client::builder()
+        .api_key(Nothing)
         .base_url("http://localhost:11434")
         .build()
         .expect("Failed to build OpenAI embedding client");
@@ -266,7 +354,11 @@ pub async fn initialize() -> Agent {
         warn!("could not determine XDG project data directory; continuing without dynamic context");
     }
 
-    let inner = builder.build();
+    builder.build()
+}
+
+pub async fn initialize() -> Agent {
+    let inner = build_inner().await;
 
     Agent::new(inner, "interactive")
 }
