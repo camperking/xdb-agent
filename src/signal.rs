@@ -193,10 +193,18 @@ fn check_allowed(
     None
 }
 
+/// Initial delay before reconnecting after a WebSocket disconnection.
+const RECONNECT_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+/// Maximum delay between reconnection attempts (caps exponential backoff).
+const RECONNECT_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Run the Signal chat daemon.
 ///
 /// Receives messages from Signal, forwards text messages from whitelisted senders
 /// and groups to the LLM agent, and sends the agent's response back via Signal.
+///
+/// Automatically reconnects when the WebSocket stream ends (e.g. idle timeout,
+/// transient network errors) using exponential backoff.
 pub async fn run_daemon<F, Fut>(db_path: &str, config: &Config, make_agent: F) -> anyhow::Result<()>
 where
     F: Fn() -> Fut,
@@ -204,10 +212,6 @@ where
 {
     let (allowed_uuids, allowed_groups) = parse_allowlists(config);
     let mut conversation_agents: HashMap<ConversationKey, Agent> = HashMap::new();
-
-    info!(db_path, "loading registered Signal manager");
-    let store = open_store(db_path).await?;
-    let mut manager = Manager::load_registered(store).await?;
 
     info!("Signal daemon running — waiting for messages…");
     if allowed_uuids.is_empty() && allowed_groups.is_empty() {
@@ -220,155 +224,194 @@ where
         );
     }
 
-    let messages = manager.receive_messages().await?;
-    pin_mut!(messages);
+    let mut reconnect_delay = RECONNECT_INITIAL_DELAY;
 
-    let mut queue_drained = false;
-
-    while let Some(item) = messages.next().await {
-        match item {
-            Received::QueueEmpty => {
-                info!("message queue drained — ready to process new messages");
-                queue_drained = true;
+    loop {
+        info!(db_path, "loading registered Signal manager");
+        let store = match open_store(db_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!(%e, "failed to open store, retrying in {:?}", reconnect_delay);
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(RECONNECT_MAX_DELAY);
+                continue;
             }
-            Received::Contacts => {
-                debug!("contacts synchronized");
-            }
-            Received::Content(content) => {
-                let sender = content.metadata.sender.raw_uuid();
-                let sender_service_id = content.metadata.sender.clone();
+        };
 
-                // Only handle DataMessage with a text body
-                let data_message = match &content.body {
-                    ContentBody::DataMessage(dm) => dm,
-                    _ => {
-                        debug!(?sender, "ignoring non-data message");
+        let mut manager = match Manager::load_registered(store).await {
+            Ok(m) => m,
+            Err(e) => {
+                error!(%e, "failed to load registered manager, retrying in {:?}", reconnect_delay);
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(RECONNECT_MAX_DELAY);
+                continue;
+            }
+        };
+
+        let messages = match manager.receive_messages().await {
+            Ok(m) => m,
+            Err(e) => {
+                error!(%e, "failed to start receiving messages, retrying in {:?}", reconnect_delay);
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(RECONNECT_MAX_DELAY);
+                continue;
+            }
+        };
+        pin_mut!(messages);
+
+        // Reset backoff on successful connection
+        reconnect_delay = RECONNECT_INITIAL_DELAY;
+        info!("WebSocket connected — listening for messages");
+
+        let mut queue_drained = false;
+
+        while let Some(item) = messages.next().await {
+            match item {
+                Received::QueueEmpty => {
+                    info!("message queue drained — ready to process new messages");
+                    queue_drained = true;
+                }
+                Received::Contacts => {
+                    debug!("contacts synchronized");
+                }
+                Received::Content(content) => {
+                    let sender = content.metadata.sender.raw_uuid();
+                    let sender_service_id = content.metadata.sender.clone();
+
+                    // Only handle DataMessage with a text body
+                    let data_message = match &content.body {
+                        ContentBody::DataMessage(dm) => dm,
+                        _ => {
+                            debug!(?sender, "ignoring non-data message");
+                            continue;
+                        }
+                    };
+
+                    let text = match &data_message.body {
+                        Some(text) => text.clone(),
+                        None => {
+                            debug!(?sender, "ignoring data message without text body");
+                            continue;
+                        }
+                    };
+
+                    // Check allowlist (contacts + groups)
+                    let thread = match check_allowed(&sender, data_message, &allowed_uuids, &allowed_groups) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+
+                    if !queue_drained {
+                        debug!(?sender, "skipping queued message received before queue drained");
                         continue;
                     }
-                };
 
-                let text = match &data_message.body {
-                    Some(text) => text.clone(),
-                    None => {
-                        debug!(?sender, "ignoring data message without text body");
-                        continue;
+                    let conversation_key = match &thread {
+                        AllowedThread::Contact => ConversationKey::Contact(sender),
+                        AllowedThread::Group(master_key) => ConversationKey::Group(*master_key),
+                    };
+                    let owner_label = short_owner_label(&conversation_key);
+
+                    if !conversation_agents.contains_key(&conversation_key) {
+                        let mut agent = make_agent().await;
+                        agent.set_owner(owner_label.clone());
+                        conversation_agents.insert(conversation_key.clone(), agent);
                     }
-                };
 
-                // Check allowlist (contacts + groups)
-                let thread = match check_allowed(&sender, data_message, &allowed_uuids, &allowed_groups) {
-                    Some(t) => t,
-                    None => continue,
-                };
+                    let conversation_agent = conversation_agents
+                        .get_mut(&conversation_key)
+                        .expect("conversation agent must exist after insertion");
 
-                if !queue_drained {
-                    debug!(?sender, "skipping queued message received before queue drained");
-                    continue;
-                }
-
-                let conversation_key = match &thread {
-                    AllowedThread::Contact => ConversationKey::Contact(sender),
-                    AllowedThread::Group(master_key) => ConversationKey::Group(*master_key),
-                };
-                let owner_label = short_owner_label(&conversation_key);
-
-                if !conversation_agents.contains_key(&conversation_key) {
-                    let mut agent = make_agent().await;
-                    agent.set_owner(owner_label.clone());
-                    conversation_agents.insert(conversation_key.clone(), agent);
-                }
-
-                let conversation_agent = conversation_agents
-                    .get_mut(&conversation_key)
-                    .expect("conversation agent must exist after insertion");
-
-                let sender_name = match manager
-                    .thread_title(&Thread::Contact(sender_service_id.clone()))
-                    .await
-                {
-                    Ok(title) => {
-                        let sender_id = sender_service_id.service_id_string();
-                        if title.trim().is_empty() || title == sender_id {
+                    let sender_name = match manager
+                        .thread_title(&Thread::Contact(sender_service_id.clone()))
+                        .await
+                    {
+                        Ok(title) => {
+                            let sender_id = sender_service_id.service_id_string();
+                            if title.trim().is_empty() || title == sender_id {
+                                None
+                            } else {
+                                Some(title)
+                            }
+                        }
+                        Err(e) => {
+                            debug!(%e, ?sender, "failed to resolve sender display name");
                             None
-                        } else {
-                            Some(title)
                         }
-                    }
-                    Err(e) => {
-                        debug!(%e, ?sender, "failed to resolve sender display name");
-                        None
-                    }
-                };
+                    };
 
-                let agent_input = format_agent_input(&text, sender_name.as_deref());
+                    let agent_input = format_agent_input(&text, sender_name.as_deref());
 
-                info!(
-                    owner = %owner_label,
-                    ?sender,
-                    sender_name = sender_name.as_deref().unwrap_or("<none>"),
-                    "received: {text}"
-                );
-                debug!(
-                    owner = %owner_label,
-                    ?sender,
-                    sender_name = sender_name.as_deref().unwrap_or("<none>"),
-                    "agent input: {agent_input}"
-                );
+                    info!(
+                        owner = %owner_label,
+                        ?sender,
+                        sender_name = sender_name.as_deref().unwrap_or("<none>"),
+                        "received: {text}"
+                    );
+                    debug!(
+                        owner = %owner_label,
+                        ?sender,
+                        sender_name = sender_name.as_deref().unwrap_or("<none>"),
+                        "agent input: {agent_input}"
+                    );
 
-                // Forward to conversation-specific agent (history owned by the agent)
-                let reply = match conversation_agent.chat(&agent_input).await {
-                    Ok(response) => response,
-                    Err(e) => {
-                        error!(%e, "agent chat failed");
-                        format!("Sorry, an error occurred: {e}")
-                    }
-                };
-
-                if should_suppress_reply(&reply) {
-                    debug!(owner = %owner_label, ?sender, "suppressing HEARTBEAT_OK reply");
-                    continue;
-                }
-
-                info!(owner = %owner_label, ?sender, "replying: {reply}");
-
-                // Send reply to the appropriate thread
-                match thread {
-                    AllowedThread::Contact => {
-                        let data_message = DataMessage {
-                            body: Some(reply),
-                            ..Default::default()
-                        };
-                        if let Err(e) = manager
-                            .send_message(sender_service_id, data_message, now_ms())
-                            .await
-                        {
-                            error!(%e, ?sender, "failed to send reply");
+                    // Forward to conversation-specific agent (history owned by the agent)
+                    let reply = match conversation_agent.chat(&agent_input).await {
+                        Ok(response) => response,
+                        Err(e) => {
+                            error!(%e, "agent chat failed");
+                            format!("Sorry, an error occurred: {e}")
                         }
+                    };
+
+                    if should_suppress_reply(&reply) {
+                        debug!(owner = %owner_label, ?sender, "suppressing HEARTBEAT_OK reply");
+                        continue;
                     }
-                    AllowedThread::Group(master_key) => {
-                        let data_message = DataMessage {
-                            body: Some(reply),
-                            group_v2: Some(presage::libsignal_service::content::GroupContextV2 {
-                                master_key: Some(master_key.to_vec()),
-                                revision: Some(0),
+
+                    info!(owner = %owner_label, ?sender, "replying: {reply}");
+
+                    // Send reply to the appropriate thread
+                    match thread {
+                        AllowedThread::Contact => {
+                            let data_message = DataMessage {
+                                body: Some(reply),
                                 ..Default::default()
-                            }),
-                            ..Default::default()
-                        };
-                        if let Err(e) = manager
-                            .send_message_to_group(&master_key, data_message, now_ms())
-                            .await
-                        {
-                            error!(%e, group = hex::encode(master_key), "failed to send group reply");
+                            };
+                            if let Err(e) = manager
+                                .send_message(sender_service_id, data_message, now_ms())
+                                .await
+                            {
+                                error!(%e, ?sender, "failed to send reply");
+                            }
+                        }
+                        AllowedThread::Group(master_key) => {
+                            let data_message = DataMessage {
+                                body: Some(reply),
+                                group_v2: Some(presage::libsignal_service::content::GroupContextV2 {
+                                    master_key: Some(master_key.to_vec()),
+                                    revision: Some(0),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            };
+                            if let Err(e) = manager
+                                .send_message_to_group(&master_key, data_message, now_ms())
+                                .await
+                            {
+                                error!(%e, group = hex::encode(master_key), "failed to send group reply");
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    warn!("message stream ended");
-    Ok(())
+        // Stream ended — WebSocket disconnected. Reconnect after a delay.
+        warn!("message stream ended (WebSocket disconnected), reconnecting in {:?}", reconnect_delay);
+        tokio::time::sleep(reconnect_delay).await;
+        reconnect_delay = (reconnect_delay * 2).min(RECONNECT_MAX_DELAY);
+    }
 }
 
 
