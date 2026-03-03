@@ -1,3 +1,4 @@
+use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
 use rig::agent::AgentBuilder;
 use rig::client::EmbeddingsClient;
@@ -11,6 +12,7 @@ use rig::vector_store::in_memory_store::InMemoryVectorStore;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::vec;
 use tracing::{info, warn};
 
 use crate::tools::{
@@ -18,6 +20,23 @@ use crate::tools::{
 };
 
 pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
+
+#[derive(Debug, Parser)]
+#[command(name = "/", about = "Slash commands for managing the agent conversation and usage", disable_version_flag = true, disable_help_flag = true)]
+struct SlashCli {
+    #[clap(subcommand)]
+    command: SlashCommand,
+}
+
+#[derive(Clone, Copy, Debug, Subcommand)]
+enum SlashCommand {
+    /// - Start a new conversation, clearing history and usage
+    New,
+    /// - Show cumulative token usage for the current conversation
+    Usage,
+    /// - Manually trigger context compaction and agent reinitialization, regardless of usage
+    Compact,
+}
 
 const XDEVBOT_PREAMBLE: &str = include_str!("templates/xDevBot.md");
 const MAX_PROJECT_FILES: usize = 500;
@@ -105,14 +124,18 @@ impl Agent {
     }
 
     pub async fn handle_slash_command(&mut self, input: &str) -> Option<String> {
-        let command = input.trim();
-        match command {
-            "/new" => {
+        let parsed = match parse_slash_command(input) {
+            Ok(command) => command,
+            Err(error) => return Some(error),
+        };
+
+        match parsed {
+            Some(SlashCommand::New) => {
                 self.reset_conversation();
                 Some("Started a new conversation.".to_string())
             }
-            "/usage" => Some(self.usage_summary()),
-            "/compact" => Some(match self.compact_and_reinitialize().await {
+            Some(SlashCommand::Usage) => Some(self.usage_summary()),
+            Some(SlashCommand::Compact) => Some(match self.compact_and_reinitialize().await {
                 Ok(path) => format!(
                     "Conversation compacted. Summary written to {} and agent reinitialized.",
                     path.display()
@@ -358,4 +381,25 @@ pub async fn initialize() -> Agent {
     let inner = build_inner().await;
 
     Agent::new(inner, "interactive")
+}
+
+fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> {
+    // remove first line since its always [sender=xxx]
+    let input = input.lines().skip(1).collect::<Vec<_>>().join("\n");
+
+    let command = input.trim();
+    if !command.starts_with('/') {
+        return Ok(None);
+    }
+
+    let body = command.trim_start_matches('/');
+    let mut argv: Vec<String> = vec!["/".to_string()]; // dummy program name for clap
+
+    let parts = shlex::split(body)
+        .ok_or_else(|| "Invalid slash command syntax: unclosed quote or escape.".to_string())?;
+    argv.extend(parts);
+
+    SlashCli::try_parse_from(argv)
+        .map(|parsed| Some(parsed.command))
+        .map_err(|error| error.to_string())
 }
