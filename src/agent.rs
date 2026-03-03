@@ -34,7 +34,7 @@ enum SlashCommand {
     New,
     /// - Show cumulative token usage for the current conversation
     Usage,
-    /// - Manually trigger context compaction and agent reinitialization, regardless of usage
+    /// - Manually compact the conversation and save a summary to the memory
     Compact,
 }
 
