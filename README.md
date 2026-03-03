@@ -123,3 +123,5 @@ Log output is written to stderr. The level can be controlled with the `RUST_LOG`
 ```sh
 RUST_LOG=debug cargo run -- daemon
 ```
+
+The agent also logs token usage for each request and cumulative totals per conversation (direct user or group). If the OpenAI-compatible backend does not return usage fields, the agent falls back to a token estimate based on text length.

@@ -9,7 +9,6 @@ use presage::model::identity::OnNewIdentity;
 use presage::model::messages::Received;
 use presage::Manager;
 use presage_store_sqlite::{SqliteConnectOptions, SqliteStore};
-use rig::completion::Chat;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -134,6 +133,21 @@ enum ConversationKey {
     Group(GroupMasterKeyBytes),
 }
 
+fn short_owner_label(key: &ConversationKey) -> String {
+    match key {
+        ConversationKey::Contact(uuid) => {
+            let s = uuid.to_string();
+            let short = s.get(..8).unwrap_or(&s);
+            format!("contact:{short}")
+        }
+        ConversationKey::Group(master_key) => {
+            let hex_key = hex::encode(master_key);
+            let short = hex_key.get(..12).unwrap_or(&hex_key);
+            format!("group:{short}")
+        }
+    }
+}
+
 /// Check if a message is from an allowed source.
 fn check_allowed(
     sender: &Uuid,
@@ -170,13 +184,12 @@ fn check_allowed(
 ///
 /// Receives messages from Signal, forwards text messages from whitelisted senders
 /// and groups to the LLM agent, and sends the agent's response back via Signal.
-pub async fn run_daemon<A, F>(db_path: &str, config: &Config, make_agent: F) -> anyhow::Result<()>
+pub async fn run_daemon<F>(db_path: &str, config: &Config, make_agent: F) -> anyhow::Result<()>
 where
-    A: Chat,
-    F: Fn() -> Agent<A>,
+    F: Fn() -> Agent,
 {
     let (allowed_uuids, allowed_groups) = parse_allowlists(config);
-    let mut conversation_agents: HashMap<ConversationKey, Agent<A>> = HashMap::new();
+    let mut conversation_agents: HashMap<ConversationKey, Agent> = HashMap::new();
 
     info!(db_path, "loading registered Signal manager");
     let store = open_store(db_path).await?;
@@ -243,12 +256,17 @@ where
                     AllowedThread::Contact => ConversationKey::Contact(sender),
                     AllowedThread::Group(master_key) => ConversationKey::Group(*master_key),
                 };
+                let owner_label = short_owner_label(&conversation_key);
 
-                info!(?sender, "received: {text}");
+                info!(owner = %owner_label, ?sender, "received: {text}");
 
                 let conversation_agent = conversation_agents
                     .entry(conversation_key)
-                    .or_insert_with(|| make_agent());
+                    .or_insert_with(|| {
+                        let mut agent = make_agent();
+                        agent.set_owner(owner_label.clone());
+                        agent
+                    });
 
                 // Forward to conversation-specific agent (history owned by the agent)
                 let reply = match conversation_agent.chat(&text).await {
@@ -259,7 +277,7 @@ where
                     }
                 };
 
-                info!(?sender, "replying: {reply}");
+                info!(owner = %owner_label, ?sender, "replying: {reply}");
 
                 // Send reply to the appropriate thread
                 match thread {

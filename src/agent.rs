@@ -1,31 +1,85 @@
 use rig::agent::AgentBuilder;
 use rig::client::CompletionClient;
-use rig::completion::{Chat, Message, PromptError};
+use rig::completion::{Message, Prompt, PromptError, Usage};
 use rig::providers::openai;
+use tracing::info;
 
 use crate::tools::{
     calculator, CounterState, GetCounter, GetCurrentTime, IncrementCounter, Multiply, ReadFile,
 };
 
-pub struct Agent<A: Chat> {
-    inner: A,
+pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
+
+pub struct Agent {
+    inner: InnerAgent,
+    owner: String,
     history: Vec<Message>,
+    cumulative_usage: Usage,
 }
 
-impl<A: Chat> Agent<A> {
-    pub fn new(inner: A) -> Self {
+impl Agent {
+    pub fn new(inner: InnerAgent, owner: impl Into<String>) -> Self {
         Self {
             inner,
+            owner: owner.into(),
             history: Vec::new(),
+            cumulative_usage: Usage::default(),
         }
     }
 
-    pub async fn chat(&mut self, input: &str) -> Result<String, PromptError> {
-        let response = self.inner.chat(input, self.history.clone()).await?;
-        self.history.push(Message::user(input));
-        self.history.push(Message::assistant(response.clone()));
-        Ok(response)
+    pub fn set_owner(&mut self, owner: impl Into<String>) {
+        self.owner = owner.into();
     }
+
+    pub async fn chat(&mut self, input: &str) -> Result<String, PromptError> {
+        let response = self
+            .inner
+            .prompt(input)
+            .with_history(&mut self.history)
+            .extended_details()
+            .await?;
+
+        let output = response.output;
+        let (call_usage, estimated) = if has_provider_usage(response.total_usage) {
+            (response.total_usage, false)
+        } else {
+            let input_tokens = estimate_tokens(input);
+            let output_tokens = estimate_tokens(&output);
+            let estimated_usage = Usage {
+                input_tokens,
+                output_tokens,
+                total_tokens: input_tokens + output_tokens,
+                cached_input_tokens: 0,
+            };
+            (estimated_usage, true)
+        };
+
+        self.cumulative_usage += call_usage;
+
+        info!(
+            owner = %self.owner,
+            input_tokens = call_usage.input_tokens,
+            output_tokens = call_usage.output_tokens,
+            total_tokens = call_usage.total_tokens,
+            cumulative_total_tokens = self.cumulative_usage.total_tokens,
+            estimated,
+            "token usage"
+        );
+
+        Ok(output)
+    }
+
+}
+
+fn has_provider_usage(usage: Usage) -> bool {
+    usage.input_tokens > 0 || usage.output_tokens > 0 || usage.total_tokens > 0
+}
+
+fn estimate_tokens(text: &str) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+    (text.chars().count() as u64).div_ceil(4)
 }
 
 fn build_tools() -> Vec<Box<dyn rig::tool::ToolDyn>> {
@@ -40,7 +94,7 @@ fn build_tools() -> Vec<Box<dyn rig::tool::ToolDyn>> {
     ]
 }
 
-pub fn initialize() -> Agent<impl Chat> {
+pub fn initialize() -> Agent {
     let client: openai::CompletionsClient = openai::CompletionsClient::builder()
         .api_key("")
         .base_url("http://localhost:8080")
@@ -58,5 +112,5 @@ pub fn initialize() -> Agent<impl Chat> {
         .tools(build_tools())
         .build();
 
-    Agent::new(inner)
+    Agent::new(inner, "interactive")
 }
