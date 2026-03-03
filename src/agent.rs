@@ -37,6 +37,10 @@ enum SlashCommand {
     Usage,
     /// - Manually compact the conversation and save a summary to the memory
     Compact,
+    /// - Disable prompting the LLM for this conversation
+    Shutup,
+    /// - Re-enable prompting the LLM for this conversation
+    Talk,
 }
 
 const XDEVBOT_PREAMBLE: &str = include_str!("templates/xDevBot.md");
@@ -62,6 +66,7 @@ pub struct Agent {
     owner: String,
     history: Vec<Message>,
     cumulative_usage: Usage,
+    prompting_enabled: bool,
 }
 
 impl Agent {
@@ -71,6 +76,7 @@ impl Agent {
             owner: owner.into(),
             history: Vec::new(),
             cumulative_usage: Usage::default(),
+            prompting_enabled: true,
         }
     }
 
@@ -81,6 +87,10 @@ impl Agent {
     pub async fn chat(&mut self, input: &str) -> Result<String, PromptError> {
         if let Some(response) = self.handle_slash_command(input).await {
             return Ok(response);
+        }
+
+        if !self.prompting_enabled {
+            return Ok("HEARTBEAT_OK".to_string());
         }
 
         let response = self
@@ -146,6 +156,14 @@ impl Agent {
                     format!("Compaction failed: {error}")
                 }
             }),
+            Some(SlashCommand::Shutup) => {
+                self.prompting_enabled = false;
+                Some("Agent prompting disabled. I will stay quiet until you send /talk.".to_string())
+            }
+            Some(SlashCommand::Talk) => {
+                self.prompting_enabled = true;
+                Some("Agent prompting enabled.".to_string())
+            }
             _ => None,
         }
     }
@@ -386,10 +404,17 @@ pub async fn initialize() -> Agent {
 }
 
 fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> {
-    // remove first line since its always [sender=xxx]
-    let input = input.lines().skip(1).collect::<Vec<_>>().join("\n");
+    let mut lines = input.lines();
+    let content = match lines.next() {
+        Some(first_line)
+            if first_line.starts_with("[sender=") && first_line.ends_with(']') =>
+        {
+            lines.collect::<Vec<_>>().join("\n")
+        }
+        Some(_) | None => input.to_string(),
+    };
 
-    let command = input.trim();
+    let command = content.trim();
     if !command.starts_with('/') {
         return Ok(None);
     }

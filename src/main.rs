@@ -101,7 +101,7 @@ async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
     let mut agent = agent::initialize().await;
 
     println!("Chat agent initialized. Type 'exit' to quit.");
-    println!("Slash commands: /new (new conversation), /usage (show token usage), /compact (summarize + reset)");
+    println!("Slash commands: /new (new conversation), /usage (show token usage), /compact (summarize + reset), /shutup (disable prompting), /talk (enable prompting)");
     println!("Available tools: add, multiply, get_time, increment_counter, get_counter, read_file\n");
 
     loop {
@@ -122,7 +122,9 @@ async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
 
         match agent.chat(input).await {
             Ok(response) => {
-                println!("{}", response);
+                if response.trim() != "HEARTBEAT_OK" {
+                    println!("{}", response);
+                }
             }
             Err(e) => {
                 eprintln!("Error: {}", e);

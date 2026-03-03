@@ -101,6 +101,8 @@ cargo run
 - `/new` — reset the current conversation context and token counters
 - `/usage` — print cumulative token usage for the current conversation
 - `/compact` — compact chat history, save to file and re-initialize the agent
+- `/shutup` — disable prompting for this conversation (agent stays silent)
+- `/talk` — re-enable prompting for this conversation
 
 ## Custom paths
 
