@@ -137,10 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Command::Daemon) => {
             let cfg = config::Config::load(&config_path)?;
-            let agent = agent::initialize();
             let local = tokio::task::LocalSet::new();
             local
-                .run_until(signal::run_daemon(&db_path, &cfg, agent))
+                .run_until(signal::run_daemon(&db_path, &cfg, agent::initialize))
                 .await?;
         }
         Some(Command::Config(config_cmd)) => {

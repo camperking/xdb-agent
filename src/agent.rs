@@ -26,14 +26,6 @@ impl<A: Chat> Agent<A> {
         self.history.push(Message::assistant(response.clone()));
         Ok(response)
     }
-
-    pub async fn chat_with_history(
-        &self,
-        input: &str,
-        history: Vec<Message>,
-    ) -> Result<String, PromptError> {
-        self.inner.chat(input, history).await
-    }
 }
 
 fn build_tools() -> Vec<Box<dyn rig::tool::ToolDyn>> {

@@ -9,7 +9,7 @@ use presage::model::identity::OnNewIdentity;
 use presage::model::messages::Received;
 use presage::Manager;
 use presage_store_sqlite::{SqliteConnectOptions, SqliteStore};
-use rig::completion::{Chat, Message};
+use rig::completion::Chat;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -170,12 +170,13 @@ fn check_allowed(
 ///
 /// Receives messages from Signal, forwards text messages from whitelisted senders
 /// and groups to the LLM agent, and sends the agent's response back via Signal.
-pub async fn run_daemon<A>(db_path: &str, config: &Config, agent: Agent<A>) -> anyhow::Result<()>
+pub async fn run_daemon<A, F>(db_path: &str, config: &Config, make_agent: F) -> anyhow::Result<()>
 where
     A: Chat,
+    F: Fn() -> Agent<A>,
 {
     let (allowed_uuids, allowed_groups) = parse_allowlists(config);
-    let mut conversation_histories: HashMap<ConversationKey, Vec<Message>> = HashMap::new();
+    let mut conversation_agents: HashMap<ConversationKey, Agent<A>> = HashMap::new();
 
     info!(db_path, "loading registered Signal manager");
     let store = open_store(db_path).await?;
@@ -243,21 +244,15 @@ where
                     AllowedThread::Group(master_key) => ConversationKey::Group(*master_key),
                 };
 
-                let history = conversation_histories
-                    .get(&conversation_key)
-                    .cloned()
-                    .unwrap_or_default();
-
                 info!(?sender, "received: {text}");
 
-                // Forward to agent
-                let reply = match agent.chat_with_history(&text, history).await {
-                    Ok(response) => {
-                        let entry = conversation_histories.entry(conversation_key).or_default();
-                        entry.push(Message::user(text.clone()));
-                        entry.push(Message::assistant(response.clone()));
-                        response
-                    }
+                let conversation_agent = conversation_agents
+                    .entry(conversation_key)
+                    .or_insert_with(|| make_agent());
+
+                // Forward to conversation-specific agent (history owned by the agent)
+                let reply = match conversation_agent.chat(&text).await {
+                    Ok(response) => response,
                     Err(e) => {
                         error!(%e, "agent chat failed");
                         format!("Sorry, an error occurred: {e}")
