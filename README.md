@@ -126,7 +126,28 @@ The LLM agent has access to the following tools:
 
 ## Logging
 
-Log output is written to stderr. The level can be controlled with the `RUST_LOG` environment variable:
+Log output is written to stderr.
+
+You can increase default verbosity with `-v` / `--verbose` (global flag):
+
+```sh
+# info (default)
+cargo run -- daemon
+
+# debug
+cargo run -- -v daemon
+
+# trace
+cargo run -- -vv daemon
+```
+
+The same flag works with other subcommands (for example interactive chat):
+
+```sh
+cargo run -- -v chat
+```
+
+`RUST_LOG` can still be used for explicit filter control:
 
 ```sh
 RUST_LOG=debug cargo run -- daemon

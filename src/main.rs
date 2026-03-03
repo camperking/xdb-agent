@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use directories::ProjectDirs;
 use std::io::{self, Write};
 
@@ -19,6 +19,10 @@ struct Cli {
     /// Path to the config file (default: ~/.config/xdb-agent/config.toml)
     #[clap(long, global = true)]
     config: Option<PathBuf>,
+
+    /// Increase log verbosity (-v = debug, -vv = trace)
+    #[clap(short = 'v', action = ArgAction::Count, global = true)]
+    verbosity: u8,
 
     #[clap(subcommand)]
     command: Option<Command>,
@@ -76,9 +80,15 @@ fn default_db_path() -> String {
         .to_string()
 }
 
-fn init_tracing() {
+fn init_tracing(verbosity: u8) {
+    let level = match verbosity {
+        0 => tracing::metadata::LevelFilter::INFO,
+        1 => tracing::metadata::LevelFilter::DEBUG,
+        _ => tracing::metadata::LevelFilter::TRACE,
+    };
+
     let filter = tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(tracing::metadata::LevelFilter::INFO.into())
+        .with_default_directive(level.into())
         .from_env_lossy()
         .add_directive("libsignal=error".parse().unwrap());
     tracing_subscriber::fmt::fmt()
@@ -126,9 +136,9 @@ async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing();
-
     let cli = Cli::parse();
+    init_tracing(cli.verbosity);
+
     let db_path = cli.db_path.unwrap_or_else(default_db_path);
     let config_path = cli.config.unwrap_or_else(config::Config::default_path);
 

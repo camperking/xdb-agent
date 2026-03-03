@@ -8,6 +8,7 @@ use presage::libsignal_service::configuration::SignalServers;
 use presage::libsignal_service::content::{ContentBody, DataMessage};
 use presage::model::identity::OnNewIdentity;
 use presage::model::messages::Received;
+use presage::store::Thread;
 use presage::Manager;
 use presage_store_sqlite::{SqliteConnectOptions, SqliteStore};
 use tracing::{debug, error, info, warn};
@@ -149,6 +150,13 @@ fn short_owner_label(key: &ConversationKey) -> String {
     }
 }
 
+fn format_agent_input(text: &str, sender_name: Option<&str>) -> String {
+    match sender_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("[sender={name}]\n{text}"),
+        None => text.to_string(),
+    }
+}
+
 /// Check if a message is from an allowed source.
 fn check_allowed(
     sender: &Uuid,
@@ -260,8 +268,6 @@ where
                 };
                 let owner_label = short_owner_label(&conversation_key);
 
-                info!(owner = %owner_label, ?sender, "received: {text}");
-
                 if !conversation_agents.contains_key(&conversation_key) {
                     let mut agent = make_agent().await;
                     agent.set_owner(owner_label.clone());
@@ -272,8 +278,41 @@ where
                     .get_mut(&conversation_key)
                     .expect("conversation agent must exist after insertion");
 
+                let sender_name = match manager
+                    .thread_title(&Thread::Contact(sender_service_id.clone()))
+                    .await
+                {
+                    Ok(title) => {
+                        let sender_id = sender_service_id.service_id_string();
+                        if title.trim().is_empty() || title == sender_id {
+                            None
+                        } else {
+                            Some(title)
+                        }
+                    }
+                    Err(e) => {
+                        debug!(%e, ?sender, "failed to resolve sender display name");
+                        None
+                    }
+                };
+
+                let agent_input = format_agent_input(&text, sender_name.as_deref());
+
+                info!(
+                    owner = %owner_label,
+                    ?sender,
+                    sender_name = sender_name.as_deref().unwrap_or("<none>"),
+                    "received: {text}"
+                );
+                debug!(
+                    owner = %owner_label,
+                    ?sender,
+                    sender_name = sender_name.as_deref().unwrap_or("<none>"),
+                    "agent input: {agent_input}"
+                );
+
                 // Forward to conversation-specific agent (history owned by the agent)
-                let reply = match conversation_agent.chat(&text).await {
+                let reply = match conversation_agent.chat(&agent_input).await {
                     Ok(response) => response,
                     Err(e) => {
                         error!(%e, "agent chat failed");
