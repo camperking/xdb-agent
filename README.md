@@ -129,6 +129,8 @@ The LLM agent has access to the following tools:
 | `increment_counter` | Increment a shared in-memory counter |
 | `get_counter` | Read the current counter value |
 | `read_file` | Read a file from the filesystem by path |
+| `get_weather` | Get current weather for a location from open-meteo |
+| `web_search` | Perform a web search and return top results uses DuckDuckGo's HTML search interface (no API key required) |
 
 ## Logging
 

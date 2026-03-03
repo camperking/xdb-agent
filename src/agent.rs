@@ -17,7 +17,7 @@ use tracing::{info, warn};
 use crate::slash_commands;
 use crate::tools::{
     calculator, CounterState, GetCounter, GetCurrentTime, GetWeather, IncrementCounter,
-    Multiply, ReadFile,
+    Multiply, ReadFile, WebSearch,
 };
 
 pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
@@ -228,6 +228,7 @@ fn build_tools() -> Vec<Box<dyn rig::tool::ToolDyn>> {
         Box::new(IncrementCounter::new(counter_state.clone())),
         Box::new(GetCounter::new(counter_state.clone())),
         Box::new(ReadFile),
+        Box::new(WebSearch),
     ]
 }
 
