@@ -2,15 +2,31 @@
 
 An LLM chat agent with Signal Messenger integration, powered by [rig](https://github.com/0xPlaygrounds/rig) and [presage](https://github.com/whisperfish/presage).
 
-The agent connects to a local OpenAI-compatible LLM server (default: `http://localhost:8080`) and exposes it over Signal as a chatbot. It supports individual conversations and group chats, with an allowlist to control who can interact with it.
+The agent connects to a local OpenAI-compatible LLM server and exposes it over Signal as a chatbot. It supports individual conversations and group chats, with an allowlist to control who can interact with it.
+
+A memory system stores recent conversation history and relevant facts, which are included in the prompt context sent to the LLM. The agent also has access to a set of tools (e.g. math operations, file reading) that it can invoke based on user input.
 
 ## Requirements
+
+### Signal
+
+- A Signal account on a primary device (phone) to scan the pairing QR code
+
+### Large language model
+
+- A running OpenAI-compatible LLM server (e.g. [llama.cpp](https://github.com/ggerganov/llama.cpp), [LM Studio](https://lmstudio.ai/), [Ollama](https://ollama.com/))
+- listening on localhost:8080
+
+### Embedding model
+
+- A running [Ollama](https://ollama.com/) server with an embedding model (default: `nomic-embed-text-v2-moe`)
+
+### Development
 
 - Rust (edition 2024)
 - `protoc` (Protocol Buffers compiler): `sudo apt install protobuf-compiler`
 - `libclang`: `sudo apt install libclang-dev`
-- A running OpenAI-compatible LLM server (e.g. [llama.cpp](https://github.com/ggerganov/llama.cpp), [LM Studio](https://lmstudio.ai/), [Ollama](https://ollama.com/))
-- A Signal account on a primary device (phone) to scan the pairing QR code
+
 
 ## Build
 
@@ -41,9 +57,9 @@ Only contacts and groups explicitly added to the allowlist will receive response
 cargo run -- config add-uuid "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 ```
 
-**Add a group** (use the group's master key as a base64 string, visible in Signal Desktop under group settings → **Group Link** or via a Signal debug export):
+**Add a group** (use the group's master key as a hex string, visible in Signal Desktop under group settings → **Group Link** or via a Signal debug export):
 ```sh
-cargo run -- config add-group "32-bytes-HEX-key"
+cargo run -- config add-group "64 hex characters = 32 bytes"
 ```
 
 **View the current allowlist:**
@@ -54,18 +70,7 @@ cargo run -- config show
 **Remove entries:**
 ```sh
 cargo run -- config remove-uuid "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-cargo run -- config remove-group "32-bytes-HEX-key"
-```
-
-The config is stored at `~/.config/xdb-agent/config.toml` by default:
-
-```toml
-allowed_uuids = [
-    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-]
-allowed_groups = [
-    "32-bytes-HEX-key",
-]
+cargo run -- config remove-group "64 hex characters = 32 bytes"
 ```
 
 ### 3. Run the Signal daemon
@@ -80,10 +85,6 @@ The daemon will:
 3. Forward incoming text messages from allowlisted contacts/groups to the LLM
 4. Send the LLM's response back via Signal
 
-Supported in-message slash commands:
-- `/new` — reset the conversation context for that contact/group and start fresh
-- `/usage` — show cumulative token usage for that contact/group conversation
-
 ### 4. Interactive terminal chat
 
 Run the agent in a plain stdin/stdout loop without Signal:
@@ -94,9 +95,10 @@ cargo run -- chat
 cargo run
 ```
 
-Interactive slash commands:
+## Interactive slash commands
 - `/new` — reset the current conversation context and token counters
 - `/usage` — print cumulative token usage for the current conversation
+- `/compact` — compact chat history, save to file and re-initialize the agent
 
 ## Custom paths
 
@@ -128,7 +130,7 @@ The LLM agent has access to the following tools:
 
 Log output is written to stderr.
 
-You can increase default verbosity with `-v` / `--verbose` (global flag):
+You can increase default verbosity with `-v` / `-vv` (global flag):
 
 ```sh
 # info (default)
@@ -139,12 +141,6 @@ cargo run -- -v daemon
 
 # trace
 cargo run -- -vv daemon
-```
-
-The same flag works with other subcommands (for example interactive chat):
-
-```sh
-cargo run -- -v chat
 ```
 
 `RUST_LOG` can still be used for explicit filter control:

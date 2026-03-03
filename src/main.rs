@@ -16,7 +16,7 @@ struct Cli {
     #[clap(long, global = true)]
     db_path: Option<String>,
 
-    /// Path to the config file (default: ~/.config/xdb-agent/config.toml)
+    /// Path to the config file (default: XDG config dir/config.toml)
     #[clap(long, global = true)]
     config: Option<PathBuf>,
 
