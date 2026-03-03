@@ -44,7 +44,7 @@ pub struct Agent {
     inner: InnerAgent,
     owner: String,
     history: Vec<Message>,
-    cumulative_usage: Usage,
+    token_usage: Usage,
     prompting_enabled: bool,
 }
 
@@ -54,7 +54,7 @@ impl Agent {
             inner,
             owner: owner.into(),
             history: Vec::new(),
-            cumulative_usage: Usage::default(),
+            token_usage: Usage::default(),
             prompting_enabled: true,
         }
     }
@@ -94,14 +94,13 @@ impl Agent {
             (estimated_usage, true)
         };
 
-        self.cumulative_usage += call_usage;
+        self.token_usage = call_usage;
 
         info!(
             owner = %self.owner,
             input_tokens = call_usage.input_tokens,
             output_tokens = call_usage.output_tokens,
             total_tokens = call_usage.total_tokens,
-            cumulative_total_tokens = self.cumulative_usage.total_tokens,
             estimated,
             "token usage"
         );
@@ -115,16 +114,16 @@ impl Agent {
 
     pub fn reset_conversation(&mut self) {
         self.history.clear();
-        self.cumulative_usage = Usage::default();
+        self.token_usage = Usage::default();
     }
 
     pub fn usage_summary(&self) -> String {
         format!(
-            "Token usage (cumulative): input={}, output={}, total={}, cached_input={}",
-            self.cumulative_usage.input_tokens,
-            self.cumulative_usage.output_tokens,
-            self.cumulative_usage.total_tokens,
-            self.cumulative_usage.cached_input_tokens,
+            "Token usage: input={}, output={}, total={}, cached_input={}",
+            self.token_usage.input_tokens,
+            self.token_usage.output_tokens,
+            self.token_usage.total_tokens,
+            self.token_usage.cached_input_tokens,
         )
     }
 
@@ -137,7 +136,7 @@ impl Agent {
     }
 
     async fn compact_and_reinitialize_if_needed(&mut self) -> anyhow::Result<()> {
-        if self.cumulative_usage.total_tokens < CONTEXT_USAGE_THRESHOLD_TOKENS {
+        if self.token_usage.total_tokens < CONTEXT_USAGE_THRESHOLD_TOKENS {
             return Ok(());
         }
 
@@ -168,7 +167,7 @@ impl Agent {
 
         self.inner = build_inner().await;
         self.history.clear();
-        self.cumulative_usage = Usage::default();
+        self.token_usage = Usage::default();
 
         Ok(summary_path)
     }
