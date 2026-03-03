@@ -6,6 +6,7 @@ use std::io::{self, Write};
 
 mod agent;
 mod config;
+mod slash_commands;
 mod signal;
 mod tools;
 

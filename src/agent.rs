@@ -1,4 +1,3 @@
-use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
 use rig::agent::AgentBuilder;
 use rig::client::EmbeddingsClient;
@@ -15,33 +14,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::vec;
 use tracing::{info, warn};
 
+use crate::slash_commands;
 use crate::tools::{
     calculator, CounterState, GetCounter, GetCurrentTime, GetWeather, IncrementCounter,
     Multiply, ReadFile,
 };
 
 pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
-
-#[derive(Debug, Parser)]
-#[command(name = "/", about = "Slash commands for managing the agent conversation and usage", disable_version_flag = true, disable_help_flag = true)]
-struct SlashCli {
-    #[clap(subcommand)]
-    command: SlashCommand,
-}
-
-#[derive(Clone, Copy, Debug, Subcommand)]
-enum SlashCommand {
-    /// - Start a new conversation, clearing history and usage
-    New,
-    /// - Show cumulative token usage for the current conversation
-    Usage,
-    /// - Manually compact the conversation and save a summary to the memory
-    Compact,
-    /// - Disable prompting the LLM for this conversation
-    Shutup,
-    /// - Re-enable prompting the LLM for this conversation
-    Talk,
-}
 
 const XDEVBOT_PREAMBLE: &str = include_str!("templates/xDevBot.md");
 const MAX_PROJECT_FILES: usize = 500;
@@ -85,7 +64,7 @@ impl Agent {
     }
 
     pub async fn chat(&mut self, input: &str) -> Result<String, PromptError> {
-        if let Some(response) = self.handle_slash_command(input).await {
+        if let Some(response) = slash_commands::handle(self, input).await {
             return Ok(response);
         }
 
@@ -134,40 +113,6 @@ impl Agent {
         Ok(output.to_string())
     }
 
-    pub async fn handle_slash_command(&mut self, input: &str) -> Option<String> {
-        let parsed = match parse_slash_command(input) {
-            Ok(command) => command,
-            Err(error) => return Some(error),
-        };
-
-        match parsed {
-            Some(SlashCommand::New) => {
-                self.reset_conversation();
-                Some("Started a new conversation.".to_string())
-            }
-            Some(SlashCommand::Usage) => Some(self.usage_summary()),
-            Some(SlashCommand::Compact) => Some(match self.compact_and_reinitialize().await {
-                Ok(path) => format!(
-                    "Conversation compacted. Summary written to {} and agent reinitialized.",
-                    path.display()
-                ),
-                Err(error) => {
-                    warn!(owner = %self.owner, %error, "manual compaction failed");
-                    format!("Compaction failed: {error}")
-                }
-            }),
-            Some(SlashCommand::Shutup) => {
-                self.prompting_enabled = false;
-                Some("Agent prompting disabled. I will stay quiet until you send /talk.".to_string())
-            }
-            Some(SlashCommand::Talk) => {
-                self.prompting_enabled = true;
-                Some("Agent prompting enabled.".to_string())
-            }
-            _ => None,
-        }
-    }
-
     pub fn reset_conversation(&mut self) {
         self.history.clear();
         self.cumulative_usage = Usage::default();
@@ -181,6 +126,14 @@ impl Agent {
             self.cumulative_usage.total_tokens,
             self.cumulative_usage.cached_input_tokens,
         )
+    }
+
+    pub(crate) fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub(crate) fn set_prompting_enabled(&mut self, enabled: bool) {
+        self.prompting_enabled = enabled;
     }
 
     async fn compact_and_reinitialize_if_needed(&mut self) -> anyhow::Result<()> {
@@ -200,7 +153,7 @@ impl Agent {
         Ok(())
     }
 
-    async fn compact_and_reinitialize(&mut self) -> anyhow::Result<PathBuf> {
+    pub(crate) async fn compact_and_reinitialize(&mut self) -> anyhow::Result<PathBuf> {
 
         let summary_prompt = "Fasse die bisherige Unterhaltung als kompaktes Markdown für das Langzeitgedächtnis zusammen. Enthalte:\n- Wichtige Nutzerpräferenzen und Einschränkungen\n- Entschiedene Lösungen und Begründungen\n- Wichtige Fakten und Kennungen\n- Offene Fragen und nächste Schritte\nNutze prägnante Stichpunkte und Überschriften.";
 
@@ -401,32 +354,4 @@ pub async fn initialize() -> Agent {
     let inner = build_inner().await;
 
     Agent::new(inner, "interactive")
-}
-
-fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> {
-    let mut lines = input.lines();
-    let content = match lines.next() {
-        Some(first_line)
-            if first_line.starts_with("[sender=") && first_line.ends_with(']') =>
-        {
-            lines.collect::<Vec<_>>().join("\n")
-        }
-        Some(_) | None => input.to_string(),
-    };
-
-    let command = content.trim();
-    if !command.starts_with('/') {
-        return Ok(None);
-    }
-
-    let body = command.trim_start_matches('/');
-    let mut argv: Vec<String> = vec!["/".to_string()]; // dummy program name for clap
-
-    let parts = shlex::split(body)
-        .ok_or_else(|| "Invalid slash command syntax: unclosed quote or escape.".to_string())?;
-    argv.extend(parts);
-
-    SlashCli::try_parse_from(argv)
-        .map(|parsed| Some(parsed.command))
-        .map_err(|error| error.to_string())
 }
