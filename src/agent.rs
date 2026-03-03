@@ -32,6 +32,10 @@ impl Agent {
     }
 
     pub async fn chat(&mut self, input: &str) -> Result<String, PromptError> {
+        if let Some(response) = self.handle_slash_command(input) {
+            return Ok(response);
+        }
+
         let response = self
             .inner
             .prompt(input)
@@ -66,7 +70,34 @@ impl Agent {
             "token usage"
         );
 
-        Ok(output)
+        Ok(output.to_string())
+    }
+
+    pub fn handle_slash_command(&mut self, input: &str) -> Option<String> {
+        let command = input.trim();
+        match command {
+            "/new" => {
+                self.reset_conversation();
+                Some("Started a new conversation.".to_string())
+            }
+            "/usage" => Some(self.usage_summary()),
+            _ => None,
+        }
+    }
+
+    pub fn reset_conversation(&mut self) {
+        self.history.clear();
+        self.cumulative_usage = Usage::default();
+    }
+
+    pub fn usage_summary(&self) -> String {
+        format!(
+            "Token usage (cumulative): input={}, output={}, total={}, cached_input={}",
+            self.cumulative_usage.input_tokens,
+            self.cumulative_usage.output_tokens,
+            self.cumulative_usage.total_tokens,
+            self.cumulative_usage.cached_input_tokens,
+        )
     }
 
 }

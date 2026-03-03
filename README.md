@@ -80,6 +80,10 @@ The daemon will:
 3. Forward incoming text messages from allowlisted contacts/groups to the LLM
 4. Send the LLM's response back via Signal
 
+Supported in-message slash commands:
+- `/new` — reset the conversation context for that contact/group and start fresh
+- `/usage` — show cumulative token usage for that contact/group conversation
+
 ### 4. Interactive terminal chat
 
 Run the agent in a plain stdin/stdout loop without Signal:
@@ -89,6 +93,10 @@ cargo run -- chat
 # or just:
 cargo run
 ```
+
+Interactive slash commands:
+- `/new` — reset the current conversation context and token counters
+- `/usage` — print cumulative token usage for the current conversation
 
 ## Custom paths
 

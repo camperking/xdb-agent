@@ -91,6 +91,7 @@ async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
     let mut agent = agent::initialize();
 
     println!("Chat agent initialized. Type 'exit' to quit.");
+    println!("Slash commands: /new (new conversation), /usage (show token usage)");
     println!("Available tools: add, multiply, get_time, increment_counter, get_counter, read_file\n");
 
     loop {
