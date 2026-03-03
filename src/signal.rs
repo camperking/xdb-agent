@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
+use std::future::Future;
 
 
 use futures::{channel::oneshot, future, pin_mut, StreamExt};
@@ -184,9 +185,10 @@ fn check_allowed(
 ///
 /// Receives messages from Signal, forwards text messages from whitelisted senders
 /// and groups to the LLM agent, and sends the agent's response back via Signal.
-pub async fn run_daemon<F>(db_path: &str, config: &Config, make_agent: F) -> anyhow::Result<()>
+pub async fn run_daemon<F, Fut>(db_path: &str, config: &Config, make_agent: F) -> anyhow::Result<()>
 where
-    F: Fn() -> Agent,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Agent>,
 {
     let (allowed_uuids, allowed_groups) = parse_allowlists(config);
     let mut conversation_agents: HashMap<ConversationKey, Agent> = HashMap::new();
@@ -260,13 +262,15 @@ where
 
                 info!(owner = %owner_label, ?sender, "received: {text}");
 
+                if !conversation_agents.contains_key(&conversation_key) {
+                    let mut agent = make_agent().await;
+                    agent.set_owner(owner_label.clone());
+                    conversation_agents.insert(conversation_key.clone(), agent);
+                }
+
                 let conversation_agent = conversation_agents
-                    .entry(conversation_key)
-                    .or_insert_with(|| {
-                        let mut agent = make_agent();
-                        agent.set_owner(owner_label.clone());
-                        agent
-                    });
+                    .get_mut(&conversation_key)
+                    .expect("conversation agent must exist after insertion");
 
                 // Forward to conversation-specific agent (history owned by the agent)
                 let reply = match conversation_agent.chat(&text).await {

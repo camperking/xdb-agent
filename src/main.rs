@@ -88,7 +88,7 @@ fn init_tracing() {
 }
 
 async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
-    let mut agent = agent::initialize();
+    let mut agent = agent::initialize().await;
 
     println!("Chat agent initialized. Type 'exit' to quit.");
     println!("Slash commands: /new (new conversation), /usage (show token usage)");
