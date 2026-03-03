@@ -15,11 +15,13 @@ A memory system stores recent conversation history and relevant facts, which are
 ### Large language model
 
 - A running OpenAI-compatible LLM server (e.g. [llama.cpp](https://github.com/ggerganov/llama.cpp), [LM Studio](https://lmstudio.ai/), [Ollama](https://ollama.com/))
-- listening on localhost:8080
+- listening on `localhost:8080`
+- eg. `./llama-server -m ./Qwen3.5-9B-Q8_0.gguf --port 8080 -ctk bf16 -ctv bf16`
 
 ### Embedding model
 
 - A running [Ollama](https://ollama.com/) server with an embedding model (default: `nomic-embed-text-v2-moe`)
+- get it with `ollama pull nomic-embed-text-v2-moe`
 
 ### Development
 
