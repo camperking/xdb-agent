@@ -4,6 +4,7 @@ use std::future::Future;
 
 
 use futures::{channel::oneshot, future, pin_mut, StreamExt};
+use tokio::sync::mpsc;
 use presage::libsignal_service::configuration::SignalServers;
 use presage::libsignal_service::content::{ContentBody, DataMessage};
 use presage::model::identity::OnNewIdentity;
@@ -257,15 +258,32 @@ where
                 continue;
             }
         };
-        pin_mut!(messages);
 
         // Reset backoff on successful connection
         reconnect_delay = RECONNECT_INITIAL_DELAY;
         info!("WebSocket connected — listening for messages");
 
+        // Channel to decouple the WebSocket driver from message processing.
+        // The receive stream MUST be polled continuously — even while we're
+        // busy with LLM calls or sending replies — because presage's duplex
+        // WebSocket requires it for sends to make progress.
+        let (tx, mut rx) = mpsc::unbounded_channel::<Received>();
+
+        // Task A: continuously poll the receive stream and forward items.
+        tokio::task::spawn_local(async move {
+            pin_mut!(messages);
+            while let Some(item) = messages.next().await {
+                if tx.send(item).is_err() {
+                    break;
+                }
+            }
+            info!("receive stream ended");
+        });
+
+        // Task B: process incoming items (LLM + send replies).
         let mut queue_drained = false;
 
-        while let Some(item) = messages.next().await {
+        while let Some(item) = rx.recv().await {
             match item {
                 Received::QueueEmpty => {
                     info!("message queue drained — ready to process new messages");
@@ -407,7 +425,7 @@ where
             }
         }
 
-        // Stream ended — WebSocket disconnected. Reconnect after a delay.
+        // Channel closed — the receive task ended (WebSocket disconnected).
         warn!("message stream ended (WebSocket disconnected), reconnecting in {:?}", reconnect_delay);
         tokio::time::sleep(reconnect_delay).await;
         reconnect_delay = (reconnect_delay * 2).min(RECONNECT_MAX_DELAY);
