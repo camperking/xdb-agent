@@ -15,10 +15,7 @@ use std::vec;
 use tracing::{info, warn};
 
 use crate::slash_commands;
-use crate::tools::{
-    calculator, CounterState, GetCounter, GetCurrentTime, GetWeather, IncrementCounter,
-    Multiply, ReadFile, WebFetch, WebSearch,
-};
+use crate::tools::{GetCurrentTime, GetWeather, JsRepl, ReadFile, WebFetch, WebSearch};
 
 pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
 
@@ -224,17 +221,13 @@ fn estimate_tokens(text: &str) -> u64 {
 }
 
 fn build_tools() -> Vec<Box<dyn rig::tool::ToolDyn>> {
-    let counter_state = CounterState::new();
     vec![
-        Box::new(calculator::Add),
-        Box::new(Multiply),
         Box::new(GetCurrentTime),
         Box::new(GetWeather),
-        Box::new(IncrementCounter::new(counter_state.clone())),
-        Box::new(GetCounter::new(counter_state.clone())),
         Box::new(ReadFile),
         Box::new(WebFetch),
         Box::new(WebSearch),
+        Box::new(JsRepl),
     ]
 }
 
