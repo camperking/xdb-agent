@@ -17,7 +17,7 @@ use tracing::{info, warn};
 use crate::slash_commands;
 use crate::tools::{
     calculator, CounterState, GetCounter, GetCurrentTime, GetWeather, IncrementCounter,
-    Multiply, ReadFile, WebSearch,
+    Multiply, ReadFile, WebFetch, WebSearch,
 };
 
 pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
@@ -61,6 +61,11 @@ impl Agent {
 
     pub fn set_owner(&mut self, owner: impl Into<String>) {
         self.owner = owner.into();
+    }
+
+    /// Add a user message to conversation history without prompting the LLM.
+    pub fn add_to_history(&mut self, input: &str) {
+        self.history.push(Message::from(input));
     }
 
     pub async fn chat(&mut self, input: &str) -> Result<String, PromptError> {
@@ -228,6 +233,7 @@ fn build_tools() -> Vec<Box<dyn rig::tool::ToolDyn>> {
         Box::new(IncrementCounter::new(counter_state.clone())),
         Box::new(GetCounter::new(counter_state.clone())),
         Box::new(ReadFile),
+        Box::new(WebFetch),
         Box::new(WebSearch),
     ]
 }

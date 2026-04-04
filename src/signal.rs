@@ -162,6 +162,31 @@ fn should_suppress_reply(reply: &str) -> bool {
     reply.trim() == "HEARTBEAT_OK"
 }
 
+fn has_mention(text: &str) -> bool {
+    text.to_lowercase().contains("@xdevbot")
+}
+
+fn is_slash_command(text: &str) -> bool {
+    let content = text
+        .lines()
+        .find(|line| !line.starts_with("[sender="))
+        .unwrap_or(text);
+    content.trim().starts_with('/')
+}
+
+fn strip_mention(text: &str) -> String {
+    let trimmed = text.trim();
+    let lower = trimmed.to_lowercase();
+    let mention = "@xdevbot";
+    if lower.starts_with(mention) {
+        trimmed[mention.len()..].trim_start().to_string()
+    } else if lower.ends_with(mention) {
+        trimmed[..trimmed.len() - mention.len()].trim_end().to_string()
+    } else {
+        text.to_string()
+    }
+}
+
 /// Check if a message is from an allowed source.
 fn check_allowed(
     sender: &Uuid,
@@ -372,6 +397,23 @@ where
                         sender_name = sender_name.as_deref().unwrap_or("<none>"),
                         "agent input: {agent_input}"
                     );
+
+                    // In group chats, require @Xdevbot mention (slash commands bypass this)
+                    if matches!(thread, AllowedThread::Group(_))
+                        && !has_mention(&text)
+                        && !is_slash_command(&text)
+                    {
+                        debug!(owner = %owner_label, ?sender, "adding group message to history without mention");
+                        conversation_agent.add_to_history(&agent_input);
+                        continue;
+                    }
+
+                    // Strip @Xdevbot mention from start/end of group messages
+                    let agent_input = if matches!(thread, AllowedThread::Group(_)) {
+                        format_agent_input(&strip_mention(&text), sender_name.as_deref())
+                    } else {
+                        agent_input
+                    };
 
                     // Forward to conversation-specific agent (history owned by the agent)
                     let reply = match conversation_agent.chat(&agent_input).await {
