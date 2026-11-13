@@ -151,11 +151,12 @@ fn short_owner_label(key: &ConversationKey) -> String {
     }
 }
 
-fn format_agent_input(text: &str, sender_name: Option<&str>) -> String {
-    match sender_name.map(str::trim).filter(|name| !name.is_empty()) {
-        Some(name) => format!("[sender={name}]\n{text}"),
-        None => text.to_string(),
-    }
+fn format_agent_input(text: &str, sender_name: Option<&str>, fallback: &str) -> String {
+    let name = sender_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(fallback);
+    format!("[sender={name}]\n{text}")
 }
 
 fn should_suppress_reply(reply: &str) -> bool {
@@ -172,19 +173,6 @@ fn is_slash_command(text: &str) -> bool {
         .find(|line| !line.starts_with("[sender="))
         .unwrap_or(text);
     content.trim().starts_with('/')
-}
-
-fn strip_mention(text: &str) -> String {
-    let trimmed = text.trim();
-    let lower = trimmed.to_lowercase();
-    let mention = "xdevbot";
-    if lower.starts_with(mention) {
-        trimmed[mention.len()..].trim_start().to_string()
-    } else if lower.ends_with(mention) {
-        trimmed[..trimmed.len() - mention.len()].trim_end().to_string()
-    } else {
-        text.to_string()
-    }
 }
 
 /// Check if a message is from an allowed source.
@@ -383,7 +371,11 @@ where
                         }
                     };
 
-                    let agent_input = format_agent_input(&text, sender_name.as_deref());
+                    let agent_input = format_agent_input(
+                        &text,
+                        sender_name.as_deref(),
+                        &sender_service_id.service_id_string(),
+                    );
 
                     info!(
                         owner = %owner_label,
@@ -398,7 +390,7 @@ where
                         "agent input: {agent_input}"
                     );
 
-                    // In group chats, require @Xdevbot mention (slash commands bypass this)
+                    // In group chats, require a mention of the bot name (slash commands bypass this)
                     if matches!(thread, AllowedThread::Group(_))
                         && !has_mention(&text)
                         && !is_slash_command(&text)
@@ -407,13 +399,6 @@ where
                         conversation_agent.add_to_history(&agent_input);
                         continue;
                     }
-
-                    // Strip @Xdevbot mention from start/end of group messages
-                    let agent_input = if matches!(thread, AllowedThread::Group(_)) {
-                        format_agent_input(&strip_mention(&text), sender_name.as_deref())
-                    } else {
-                        agent_input
-                    };
 
                     // Forward to conversation-specific agent (history owned by the agent)
                     let reply = match conversation_agent.chat(&agent_input).await {
@@ -471,6 +456,37 @@ where
         warn!("message stream ended (WebSocket disconnected), reconnecting in {:?}", reconnect_delay);
         tokio::time::sleep(reconnect_delay).await;
         reconnect_delay = (reconnect_delay * 2).min(RECONNECT_MAX_DELAY);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_input_labels_the_sender_by_display_name() {
+        assert_eq!(
+            format_agent_input("hallo", Some("Anna"), "11223344"),
+            "[sender=Anna]\nhallo"
+        );
+    }
+
+    #[test]
+    fn agent_input_falls_back_to_the_service_id_without_a_name() {
+        for missing in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                format_agent_input("hallo", missing, "11223344"),
+                "[sender=11223344]\nhallo"
+            );
+        }
+    }
+
+    #[test]
+    fn mention_gate_accepts_the_name_with_and_without_at() {
+        assert!(has_mention("@xdevbot hallo"));
+        assert!(has_mention("xdevbot hallo"));
+        assert!(has_mention("hallo XdevBot"));
+        assert!(!has_mention("hallo zusammen"));
     }
 }
 
