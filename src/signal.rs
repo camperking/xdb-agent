@@ -163,7 +163,7 @@ fn should_suppress_reply(reply: &str) -> bool {
 }
 
 fn has_mention(text: &str) -> bool {
-    text.to_lowercase().contains("@xdevbot")
+    text.to_lowercase().contains("xdevbot")
 }
 
 fn is_slash_command(text: &str) -> bool {
@@ -177,7 +177,7 @@ fn is_slash_command(text: &str) -> bool {
 fn strip_mention(text: &str) -> String {
     let trimmed = text.trim();
     let lower = trimmed.to_lowercase();
-    let mention = "@xdevbot";
+    let mention = "xdevbot";
     if lower.starts_with(mention) {
         trimmed[mention.len()..].trim_start().to_string()
     } else if lower.ends_with(mention) {
