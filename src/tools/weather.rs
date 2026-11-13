@@ -1,5 +1,4 @@
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -50,24 +49,28 @@ impl Tool for GetWeather {
     type Args = GetWeatherArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "get_weather".to_string(),
-            description: "Ruft das aktuelle Wetter für einen Ort über Open-Meteo ab und gibt eine kompakte Zusammenfassung zurück.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "Ort oder Region, z. B. 'Berlin', 'New York' oder '48.14,11.58'"
-                    }
-                },
-                "required": ["location"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Ruft das aktuelle Wetter für einen Ort über Open-Meteo ab und gibt eine kompakte Zusammenfassung zurück.".to_string()
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "Ort oder Region, z. B. 'Berlin', 'New York' oder '48.14,11.58'"
+                }
+            },
+            "required": ["location"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         let location = args.location.trim();
         if location.is_empty() {
             return Err(WeatherError("location must not be empty".to_string()));
@@ -97,7 +100,9 @@ impl Tool for GetWeather {
         let geocoding = geocoding_response
             .json::<GeocodingResponse>()
             .await
-            .map_err(|error| WeatherError(format!("Failed to parse geocoding response: {error}")))?;
+            .map_err(|error| {
+                WeatherError(format!("Failed to parse geocoding response: {error}"))
+            })?;
 
         let match_result = geocoding
             .results
@@ -131,9 +136,9 @@ impl Tool for GetWeather {
             .await
             .map_err(|error| WeatherError(format!("Failed to parse weather response: {error}")))?;
 
-        let current = forecast
-            .current
-            .ok_or_else(|| WeatherError("Open-Meteo response missing current weather data".to_string()))?;
+        let current = forecast.current.ok_or_else(|| {
+            WeatherError("Open-Meteo response missing current weather data".to_string())
+        })?;
 
         let mut place_parts = vec![match_result.name];
         if let Some(admin1) = match_result.admin1 {

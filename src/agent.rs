@@ -1,12 +1,9 @@
 use directories::ProjectDirs;
-use rig::agent::AgentBuilder;
-use rig::client::EmbeddingsClient;
-use rig::client::CompletionClient;
-use rig::client::Nothing;
-use rig::completion::{Message, Prompt, PromptError, Usage};
+use rig::agent::{Agent as RigAgent, AgentBuilder};
+use rig::completion::{Message, PromptError, Usage};
 use rig::embeddings::{Embed, EmbedError, EmbeddingsBuilder, TextEmbedder};
-use rig::providers::ollama;
-use rig::providers::openai;
+use rig::providers::ollama::OllamaConfig;
+use rig::providers::openai::OpenAIConfig;
 use rig::vector_store::in_memory_store::InMemoryVectorStore;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -17,7 +14,7 @@ use tracing::{info, warn};
 use crate::slash_commands;
 use crate::tools::{GetCurrentTime, GetWeather, JsRepl, ReadFile, WebFetch, WebSearch};
 
-pub type InnerAgent = rig::agent::Agent<openai::CompletionModel>;
+pub type InnerAgent = RigAgent;
 
 const XDEVBOT_PREAMBLE: &str = include_str!("templates/xDevBot.md");
 const MAX_PROJECT_FILES: usize = 500;
@@ -77,25 +74,24 @@ impl Agent {
         let response = self
             .inner
             .prompt(input)
-            .with_history(&mut self.history)
-            .extended_details()
+            .history(self.history.clone())
             .await?;
 
-        let output = response.output;
-        let (call_usage, estimated) = if has_provider_usage(response.total_usage) {
-            (response.total_usage, false)
+        let output = response.output();
+        let transcript = response.messages().to_vec();
+        let (call_usage, estimated) = if response.usage().is_reported() {
+            (response.usage(), false)
         } else {
             let input_tokens = estimate_tokens(input);
             let output_tokens = estimate_tokens(&output);
-            let estimated_usage = Usage {
-                input_tokens,
-                output_tokens,
-                total_tokens: input_tokens + output_tokens,
-                cached_input_tokens: 0,
-            };
+            let estimated_usage = Usage::new()
+                .input_tokens(input_tokens)
+                .output_tokens(output_tokens)
+                .total_tokens(input_tokens + output_tokens);
             (estimated_usage, true)
         };
 
+        self.history.extend(transcript);
         self.token_usage = call_usage;
 
         info!(
@@ -122,10 +118,10 @@ impl Agent {
     pub fn usage_summary(&self) -> String {
         format!(
             "Token usage: input={}, output={}, total={}, cached_input={}",
-            self.token_usage.input_tokens,
-            self.token_usage.output_tokens,
-            self.token_usage.total_tokens,
-            self.token_usage.cached_input_tokens,
+            self.token_usage.input_tokens.unwrap_or(0),
+            self.token_usage.output_tokens.unwrap_or(0),
+            self.token_usage.total_tokens.unwrap_or(0),
+            self.token_usage.cached_input_tokens.unwrap_or(0),
         )
     }
 
@@ -138,7 +134,7 @@ impl Agent {
     }
 
     async fn compact_and_reinitialize_if_needed(&mut self) -> anyhow::Result<()> {
-        if self.token_usage.total_tokens < CONTEXT_USAGE_THRESHOLD_TOKENS {
+        if self.token_usage.context_tokens().unwrap_or(0) < CONTEXT_USAGE_THRESHOLD_TOKENS {
             return Ok(());
         }
 
@@ -155,16 +151,15 @@ impl Agent {
     }
 
     pub(crate) async fn compact_and_reinitialize(&mut self) -> anyhow::Result<PathBuf> {
-
         let summary_prompt = "Fasse die bisherige Unterhaltung als kompaktes Markdown für das Langzeitgedächtnis zusammen. Enthalte:\n- Wichtige Nutzerpräferenzen und Einschränkungen\n- Entschiedene Lösungen und Begründungen\n- Wichtige Fakten und Kennungen\n- Offene Fragen und nächste Schritte\nNutze prägnante Stichpunkte und Überschriften.";
 
         let response = self
             .inner
             .prompt(summary_prompt)
-            .with_history(&mut self.history)
+            .history(self.history.clone())
             .await?;
 
-        let summary_md = response.to_string();
+        let summary_md = response.output();
         let summary_path = write_memory_summary_markdown(&self.owner, &summary_md)?;
 
         self.inner = build_inner().await;
@@ -173,7 +168,6 @@ impl Agent {
 
         Ok(summary_path)
     }
-
 }
 
 fn write_memory_summary_markdown(owner: &str, summary: &str) -> anyhow::Result<PathBuf> {
@@ -209,10 +203,6 @@ fn sanitize_filename_segment(input: &str) -> String {
     }
 }
 
-fn has_provider_usage(usage: Usage) -> bool {
-    usage.input_tokens > 0 || usage.output_tokens > 0 || usage.total_tokens > 0
-}
-
 fn estimate_tokens(text: &str) -> u64 {
     if text.is_empty() {
         return 0;
@@ -220,15 +210,14 @@ fn estimate_tokens(text: &str) -> u64 {
     (text.chars().count() as u64).div_ceil(4)
 }
 
-fn build_tools() -> Vec<Box<dyn rig::tool::ToolDyn>> {
-    vec![
-        Box::new(GetCurrentTime),
-        Box::new(GetWeather),
-        Box::new(ReadFile),
-        Box::new(WebFetch),
-        Box::new(WebSearch),
-        Box::new(JsRepl),
-    ]
+fn register_tools(builder: AgentBuilder) -> AgentBuilder {
+    builder
+        .tool(GetCurrentTime)
+        .tool(GetWeather)
+        .tool(ReadFile)
+        .tool(WebFetch)
+        .tool(WebSearch)
+        .tool(JsRepl)
 }
 
 fn collect_project_files(root: &Path) -> Vec<PathBuf> {
@@ -295,40 +284,37 @@ fn load_project_documents(root: &Path) -> Vec<ProjectFileDocument> {
 }
 
 async fn build_inner() -> InnerAgent {
-    let client: openai::CompletionsClient = openai::CompletionsClient::builder()
-        .api_key("")
-        .base_url("http://localhost:8080")
-        .build()
-        .expect("Failed to build OpenAI client");
+    let client = OpenAIConfig::from_env()
+        .expect("OPENAI_API_KEY fehlt — .env im Startverzeichnis ausfüllen oder Variable setzen")
+        .client();
 
-    let embedding_client: ollama::Client = ollama::Client::builder()
-        .api_key(Nothing)
-        .base_url("http://localhost:11434")
-        .build()
-        .expect("Failed to build OpenAI embedding client");
+    let embedding_client = OllamaConfig::from_env()
+        .expect("Ollama-Einstellungen konnten nicht aus der Umgebung gelesen werden")
+        .client();
 
-    let mut builder = AgentBuilder::new(client.completion_model("Qwen3.5-35B-A3B"))
-        .name("Chat Agent")
-        .preamble(XDEVBOT_PREAMBLE)
-        .default_max_turns(100)
-        .tools(build_tools());
+    let mut builder = register_tools(
+        AgentBuilder::new(client.chat("Qwen3.5-35B-A3B"))
+            .name("Chat Agent")
+            .preamble(XDEVBOT_PREAMBLE)
+            .default_max_turns(100),
+    );
 
-    if let Some(document_root) = ProjectDirs::from("org", "xdb", "xdb-agent")
-        .map(|dirs| dirs.data_dir().to_path_buf())
+    if let Some(document_root) =
+        ProjectDirs::from("org", "xdb", "xdb-agent").map(|dirs| dirs.data_dir().to_path_buf())
     {
         let document_root = document_root.join("memory");
         let documents = load_project_documents(&document_root);
         if documents.is_empty() {
             warn!(path = %document_root.display(), "no project files found for dynamic context");
         } else {
-            let embedding_model = embedding_client.embedding_model("nomic-embed-text-v2-moe");
+            let embedding_model = embedding_client.embedding("nomic-embed-text-v2-moe", None);
             match EmbeddingsBuilder::new(embedding_model.clone()).documents(documents) {
                 Ok(embeddings_builder) => match embeddings_builder.build().await {
                     Ok(embeddings) => {
-                        let vector_store = InMemoryVectorStore::from_documents_with_id_f(
-                            embeddings,
-                            |doc| doc.path.clone(),
-                        );
+                        let vector_store =
+                            InMemoryVectorStore::from_documents_with_id_f(embeddings, |doc| {
+                                doc.path.clone()
+                            });
                         let index = vector_store.index(embedding_model);
                         builder = builder.dynamic_context(4, index);
                         info!(path = %document_root.display(), "dynamic project context enabled");

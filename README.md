@@ -117,6 +117,26 @@ cargo run -- --db-path /path/to/signal.db3 --config /path/to/config.toml daemon
 | Signal database | `~/.local/share/xdb-agent/signal.db3` |
 | Configuration | `~/.config/xdb-agent/config.toml` |
 
+## Model endpoint configuration
+
+The LLM and embedding endpoints are read from the process environment. A `.env`
+file in the working directory (or any of its parents) is loaded at startup, and
+`.env` is gitignored — keep the API key out of the repository. Start from the
+template:
+
+```sh
+cp .env.example .env
+```
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `OPENAI_API_KEY` | API key for the OpenAI-compatible gateway | `sk-…` |
+| `OPENAI_BASE_URL` | Gateway base URL. It **must include `/v1`**: rig 0.46 appends only `/chat/completions` itself | `http://localhost:8080/v1` |
+| `OLLAMA_API_BASE_URL` | Ollama endpoint used for the dynamic-context embeddings | `http://localhost:11434` |
+
+Running the daemon from a service manager that has no working-directory `.env`
+means exporting these variables instead (e.g. `EnvironmentFile=` in a systemd unit).
+
 ## Available tools
 
 The LLM agent has access to the following tools:

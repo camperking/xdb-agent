@@ -1,6 +1,5 @@
 use boa_engine::{Context, Source};
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -25,24 +24,28 @@ impl Tool for JsRepl {
     type Args = JsReplArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "js_repl".to_string(),
-            description: "Führt JavaScript-Code aus und gibt das Ergebnis zurück. Nützlich für Berechnungen, Datenverarbeitung und Logik.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "Der auszuführende JavaScript-Code"
-                    }
-                },
-                "required": ["code"]
-            }),
-        }
+    fn description(&self) -> String {
+        "Führt JavaScript-Code aus und gibt das Ergebnis zurück. Nützlich für Berechnungen, Datenverarbeitung und Logik.".to_string()
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Der auszuführende JavaScript-Code"
+                }
+            },
+            "required": ["code"]
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         let code = args.code.trim();
         if code.is_empty() {
             return Err(JsReplError("code must not be empty".to_string()));

@@ -139,6 +139,10 @@ async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Eine fehlende .env ist kein Fehler: die Werte können auch aus der
+    // Prozessumgebung stammen.
+    dotenvy::dotenv().ok();
+
     let cli = Cli::parse();
     init_tracing(cli.verbosity);
 

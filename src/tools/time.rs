@@ -1,5 +1,4 @@
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -20,16 +19,23 @@ impl Tool for GetCurrentTime {
     type Args = GetCurrentTimeArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: "get_time".to_string(),
-            description: "Gibt das aktuelle Datum und die aktuelle Uhrzeit im UTC-Format zurück (YYYY-MM-DD HH:MM:SS UTC)".to_string(),
-            parameters: json!({}),
-        }
+    fn description(&self) -> String {
+        "Gibt das aktuelle Datum und die aktuelle Uhrzeit im UTC-Format zurück (YYYY-MM-DD HH:MM:SS UTC)".to_string()
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn parameters(&self) -> serde_json::Value {
+        json!({})
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        _args: Self::Args,
+    ) -> Result<Self::Output, Self::Error> {
         use chrono::Utc;
-        Ok(format!("Current time: {}", Utc::now().format("%Y-%m-%d %H:%M:%S UTC")))
+        Ok(format!(
+            "Current time: {}",
+            Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        ))
     }
 }
